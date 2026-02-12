@@ -5,7 +5,7 @@ import { useMemo, useRef, useState } from "react";
 type UploadState =
   | { status: "idle" }
   | { status: "ready"; file: File }
-  | { status: "uploading"; file: File }
+  | { status: "uploading"; file: File; progress?: { current: number; total: number } }
   | { status: "error"; message: string }
   | { status: "done"; file: File; text: string; pdfBase64: string | null };
 
@@ -23,17 +23,22 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [upload, setUpload] = useState<UploadState>({ status: "idle" });
   const [previewName, setPreviewName] = useState<string | null>(null);
-  const [lang, setLang] = useState("eng");
+  const [lang, setLang] = useState("amh"); // Default to Amharic
 
   const helperText = useMemo(() => {
-    if (upload.status === "uploading") return "Cooking your searchable PDF...";
+    if (upload.status === "uploading") {
+      if (upload.progress) {
+        return `Processing page ${upload.progress.current} of ${upload.progress.total}...`;
+      }
+      return "Processing your PDF with OCR...";
+    }
     if (upload.status === "done")
       return upload.pdfBase64
         ? "OCR complete. Download the searchable PDF or preview the text."
         : "OCR complete. Preview the extracted text below.";
     if (upload.status === "error") return upload.message;
-    if (upload.status === "ready") return "Tap convert to kick off OCR.";
-    return "Drop a scan or PDF. We handle OCR and return a searchable PDF.";
+    if (upload.status === "ready") return "Click 'Convert' to start OCR processing.";
+    return "Upload a scan or PDF to create a searchable PDF with OCR.";
   }, [upload]);
 
   async function handleFileSelect(fileList: FileList | null) {
@@ -80,12 +85,20 @@ export default function Home() {
 
     setUpload({ status: "uploading", file: activeFile });
 
+    // Add timeout to prevent indefinite waiting
+    const timeoutDuration = 5 * 60 * 1000; // 5 minutes
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("OCR processing timeout. The file may be too complex or large.")), timeoutDuration)
+    );
+
     try {
-      // Calls the API route, which currently returns stubbed OCR output.
-      const response = await fetch("/api/ocr", {
+      // Calls the API route with timeout protection
+      const fetchPromise = fetch("/api/ocr", {
         method: "POST",
         body: formData,
       });
+
+      const response = await Promise.race([fetchPromise, timeoutPromise]) as Response;
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
@@ -134,7 +147,7 @@ export default function Home() {
               Turn scans into searchable PDFs in one drop
             </h1>
             <p className="max-w-2xl text-lg text-zinc-400">
-              Upload a PDF or image. We run OCR on-device, bake a searchable
+              Upload a PDF or image. We run OCR on-device, create a searchable
               PDF, and serve you the text.
             </p>
           </div>
@@ -170,7 +183,7 @@ export default function Home() {
                   </div>
                   <div className="space-y-1">
                     <p className="text-base font-medium text-white">
-                      {previewName || "Drop an image or PDF (PNG, JPG, PDF)"}
+                      {previewName || "Upload a scan or PDF (PNG, JPG, PDF)"}
                     </p>
                     <p className="text-sm text-zinc-400">
                       Max 10MB · PNG, JPG, PDF
@@ -212,8 +225,24 @@ export default function Home() {
                 </div>
                 <p className="text-sm text-zinc-300">{helperText}</p>
                 {upload.status === "uploading" && (
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                    <div className="h-full w-1/3 animate-[pulse_1.2s_ease-in-out_infinite] rounded-full bg-emerald-400/80" />
+                  <div className="space-y-2">
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
+                      {upload.progress ? (
+                        <div
+                          className="h-full rounded-full bg-emerald-400/80 transition-all duration-300"
+                          style={{
+                            width: `${(upload.progress.current / upload.progress.total) * 100}%`,
+                          }}
+                        />
+                      ) : (
+                        <div className="h-full w-1/3 animate-[pulse_1.2s_ease-in-out_infinite] rounded-full bg-emerald-400/80" />
+                      )}
+                    </div>
+                    {upload.progress && (
+                      <p className="text-xs text-zinc-400">
+                        {Math.round((upload.progress.current / upload.progress.total) * 100)}% complete
+                      </p>
+                    )}
                   </div>
                 )}
                 <div className="flex flex-wrap gap-3">
@@ -270,8 +299,7 @@ export default function Home() {
                     </option>
                   </select>
                   <span className="text-xs text-zinc-400">
-                    First run for a language downloads its model; expect a
-                    slower request.
+                    First-time use of a language will download its model, which may take longer.
                   </span>
                 </div>
               </div>
